@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Go Modular Crypto Bot</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="wasm_exec.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-7xl mx-auto">
+        <div class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-white mb-2">Enhanced Go Crypto Bot</h1>
+            <p class="text-slate-400">Advanced algorithmic trading with WebAssembly</p>
+        </div>
+        
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            <div class="lg:col-span-1 glass-morphism p-6 rounded-xl shadow-2xl h-fit">
+                
+                <div class="stats-grid mb-6">
+                    <div class="stat-box">
+                        <div class="stat-value" id="total-trades">0</div>
+                        <div class="stat-label">Total Trades</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value" id="win-rate">0%</div>
+                        <div class="stat-label">Win Rate</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value" id="current-price">$0.00</div>
+                        <div class="stat-label">Current Price</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value" id="profit-loss">$0.00</div>
+                        <div class="stat-label">P/L</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value" id="uptime">00:00</div>
+                        <div class="stat-label">Uptime</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value" id="last-signal">NONE</div>
+                        <div class="stat-label">Last Signal</div>
+                    </div>
+                </div>
+
+                <div class="border-b border-slate-600 mb-4">
+                    <nav class="-mb-px flex space-x-2" aria-label="Tabs">
+                        <a class="tab-link active" data-tab="settings">Settings</a>
+                        <a class="tab-link" data-tab="documentation">Docs</a>
+                        <a class="tab-link" data-tab="mods">User Mods</a>
+                        <a class="tab-link" data-tab="alerts">Alerts</a>
+                    </nav>
+                </div>
+
+                <div>
+                    <div id="tab-settings" class="tab-content active space-y-6">
+                        <div class="form-section space-y-4">
+                            <h3 class="font-semibold text-white flex items-center">
+                                <span class="w-6 h-6 bg-indigo-500 rounded-full flex items-center justify-center text-xs font-bold mr-2">1</span>
+                                General Settings
+                            </h3>
+                            <div>
+                                <label for="symbol" class="block text-sm font-medium text-slate-300 mb-2">Trading Pair</label>
+                                <select id="symbol" class="param-input mb-2"></select>
+                                <div class="flex space-x-2">
+                                    <input type="text" id="new-symbol" placeholder="e.g., ADAUSDT" class="param-input">
+                                    <button id="add-symbol-btn" class="btn-primary text-white font-semibold py-2 px-4 rounded-lg text-sm">Add</button>
+                                </div>
+                                <p class="mt-2 text-xs text-slate-500">Select a pair or add a new one.</p>
+                            </div>
+                            <div class="flex items-center justify-between p-4 bg-slate-800/50 rounded-lg">
+                                <div>
+                                    <label for="paper-trading" class="text-sm font-medium text-slate-300">Paper Trading Mode</label>
+                                    <p class="text-xs text-slate-500 mt-1">Safe mode with fake money</p>
+                                </div>
+                                <label class="toggle">
+                                    <input type="checkbox" id="paper-trading" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div>
+                                <label for="tick-interval" class="block text-sm font-medium text-slate-300 mb-2">Tick Interval (seconds)</label>
+                                <input type="range" id="tick-interval" min="1" max="60" value="5" class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer">
+                                <div class="flex justify-between text-xs text-slate-500 mt-1">
+                                    <span>1s</span>
+                                    <span id="tick-value">5s</span>
+                                    <span>60s</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label for="risk-level" class="block text-sm font-medium text-slate-300 mb-2">Risk Level</label>
+                                <select id="risk-level" class="param-input">
+                                    <option value="conservative">Conservative</option>
+                                    <option value="moderate" selected>Moderate</option>
+                                    <option value="aggressive">Aggressive</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div class="form-section space-y-4">
+                            <h3 class="font-semibold text-white flex items-center">
+                                <span class="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-xs font-bold mr-2">2</span>
+                                Data Source (Connector)
+                            </h3>
+                            <div>
+                                <label for="connector" class="block text-sm font-medium text-slate-300 mb-2">Connector</label>
+                                <select id="connector" class="param-input" title="Connector">
+                                    <option value="simulation">Simulation (Safe, Fake Data)</option>
+                                    <option value="coinbase">Coinbase (Template)</option>
+                                    <option value="binance">Binance (Template)</option>
+                                </select>
+                            </div>
+                            <div id="connector-params" class="space-y-3"></div>
+                            <div class="alert alert-info">
+                                <strong>Note:</strong> Real exchange connections require API keys and are templates only.
+                            </div>
+                        </div>
+                        
+                        <div class="form-section space-y-4">
+                            <h3 class="font-semibold text-white flex items-center">
+                                <span class="w-6 h-6 bg-purple-500 rounded-full flex items-center justify-center text-xs font-bold mr-2">3</span>
+                                Trading Strategy
+                            </h3>
+                                <label for="strategy" class="block text-sm font-medium text-slate-300 mb-2">Trading Strategy</label>
+                                <select id="strategy" class="param-input">
+                                    <option value="sma_crossover">Simple Moving Average Crossover</option>
+                                    <option value="rsi_basic">Relative Strength Index (RSI)</option>
+                                    <option value="stochastic">Stochastic Oscillator</option>
+                                    <option value="bollinger">Bollinger Bands</option>
+                                </select>
+                            <div id="strategy-params" class="space-y-3"></div>
+                            <div id="strategy-description" class="text-xs text-slate-400 p-3 bg-slate-800/50 rounded-lg"></div>
+                        </div>
+                    </div>
+
+                    <div id="tab-documentation" class="tab-content space-y-6 doc-section"></div>
+
+                    <div id="tab-mods" class="tab-content space-y-4">
+                        <div class="doc-section">
+                            <h4>🔧 Custom Strategy Development</h4>
+                            <p>Write your own Go trading strategy. The function must be named <code>strategyUserMod</code> and return a <code>Signal</code>.</p>
+                        </div>
+                        <div>
+                            <label for="mod-code" class="block text-sm font-medium text-slate-300 mb-2">Custom Strategy Go Code</label>
+                            <textarea id="mod-code" rows="15" class="w-full p-3 bg-slate-900/80 border border-slate-600 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-500 focus:border-transparent" placeholder="// Write your strategy here..."></textarea>
+                        </div>
+                        <div class="flex space-x-3">
+                            <button id="applyModButton" class="flex-1 btn-primary text-white font-semibold py-3 px-4 rounded-lg transition duration-300">Apply Mod & Recompile</button>
+                            <button id="validateModButton" class="btn-success text-white font-semibold py-3 px-4 rounded-lg transition duration-300">Validate</button>
+                        </div>
+                        <div id="mod-status" class="hidden"></div>
+                    </div>
+                    
+                    <div id="tab-alerts" class="tab-content space-y-4">
+                        <div class="doc-section">
+                            <h4>🔔 Alert Configuration</h4>
+                            <p>Set up notifications for various trading events.</p>
+                        </div>
+                        <div class="form-section space-y-4">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label for="trade-alerts" class="text-sm font-medium text-slate-300">Trade Execution Alerts</label>
+                                    <p class="text-xs text-slate-500">Get notified when trades are executed</p>
+                                </div>
+                                <label for="trade-alerts" class="toggle" title="Enable trade execution alerts">
+                                    <input type="checkbox" id="trade-alerts" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label for="price-alerts" class="text-sm font-medium text-slate-300">Price Threshold Alerts</label>
+                                    <p class="text-xs text-slate-500">Alert when price moves by certain percentage</p>
+                                </div>
+                                <label for="price-alerts" class="toggle" title="Enable price threshold alerts">
+                                    <input type="checkbox" id="price-alerts">
+                                </label>
+                            </div>
+                            <div>
+                                <label for="price-threshold" class="block text-sm font-medium text-slate-300 mb-2">Price Change Threshold (%)</label>
+                                <input type="number" id="price-threshold" value="5" min="1" max="50" class="param-input">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="flex items-center space-x-3 pt-6">
+                    <button id="startButton" class="flex-1 btn-success text-white font-bold py-3 px-4 rounded-lg transition duration-300">
+                        <span class="flex items-center justify-center">
+                            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h1.5a2.5 2.5 0 110 5H9V10z"></path>
+                            </svg>
+                            Start Bot
+                        </span>
+                    </button>
+                    <button id="stopButton" class="flex-1 btn-danger text-white font-bold py-3 px-4 rounded-lg transition duration-300" disabled>
+                        <span class="flex items-center justify-center">
+                            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"></path>
+                            </svg>
+                            Stop Bot
+                        </span>
+                    </button>
+                </div>
+                <div id="status" class="text-center text-sm font-medium p-3 rounded-lg text-white status-idle mt-4">STATUS: IDLE</div>
+            </div>
+
+            <div class="lg:col-span-2 space-y-8">
+                <div class="glass-morphism p-6 rounded-xl shadow-2xl">
+                    <h2 class="text-xl font-bold text-white mb-4 flex items-center">
+                        <svg class="w-6 h-6 mr-2 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                        </svg>
+                        Performance Chart
+                    </h2>
+                    <div class="chart-container">
+                        <canvas id="priceChart"></canvas>
+                    </div>
+                    </div>
+                
+                <div class="glass-morphism p-6 rounded-xl shadow-2xl">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-xl font-bold text-white flex items-center">
+                            <svg class="w-6 h-6 mr-2 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                            </svg>
+                            Bot Logs
+                        </h2>
+                        <div class="flex space-x-2">
+                            <button id="clearLogsBtn" class="text-xs bg-slate-600 hover:bg-slate-500 text-white px-3 py-1 rounded-lg transition">Clear</button>
+                            <button id="exportLogsBtn" class="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1 rounded-lg transition">Export</button>
+                        </div>
+                    </div>
+                    <div id="log-output" class="h-96 bg-slate-900/50 rounded-lg p-4 overflow-y-auto font-mono text-xs space-y-1 border border-slate-700"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="scripts.js" defer></script>
+</body>
+</html>
