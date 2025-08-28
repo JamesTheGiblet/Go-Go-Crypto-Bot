@@ -350,7 +350,7 @@ function populateDocs() {
             <p>Copy this template to get started with custom strategies:</p>
             <pre><code>// Example: Buy when price increases, sell when it decreases
 func strategyUserMod(bs *BotState) Signal {
-    if len(bs.prices) < 2 {
+    if len(bs.prices) &lt; 2 {
         return HOLD // Need at least 2 price points
     }
     
@@ -358,10 +358,10 @@ func strategyUserMod(bs *BotState) Signal {
     previousPrice := bs.prices[len(bs.prices)-2]
     
     // Simple momentum strategy
-    if currentPrice > previousPrice * 1.01 {
+    if currentPrice &gt; previousPrice * 1.01 {
         return BUY
     }
-    if currentPrice < previousPrice * 0.99 {
+    if currentPrice &lt; previousPrice * 0.99 {
         return SELL
     }
     return HOLD

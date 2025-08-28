@@ -129,6 +129,7 @@
                                 <span class="w-6 h-6 bg-purple-500 rounded-full flex items-center justify-center text-xs font-bold mr-2">3</span>
                                 Trading Strategy
                             </h3>
+                            <div>
                                 <label for="strategy" class="block text-sm font-medium text-slate-300 mb-2">Trading Strategy</label>
                                 <select id="strategy" class="param-input">
                                     <option value="sma_crossover">Simple Moving Average Crossover</option>
@@ -136,6 +137,7 @@
                                     <option value="stochastic">Stochastic Oscillator</option>
                                     <option value="bollinger">Bollinger Bands</option>
                                 </select>
+                            </div>
                             <div id="strategy-params" class="space-y-3"></div>
                             <div id="strategy-description" class="text-xs text-slate-400 p-3 bg-slate-800/50 rounded-lg"></div>
                         </div>
@@ -182,6 +184,7 @@
                                 </div>
                                 <label for="price-alerts" class="toggle" title="Enable price threshold alerts">
                                     <input type="checkbox" id="price-alerts">
+                                    <span class="slider"></span>
                                 </label>
                             </div>
                             <div>
