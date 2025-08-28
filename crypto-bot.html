@@ -6,6 +6,8 @@
     <title>Enhanced Go Modular Crypto Bot</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-downsample@2.0.1/dist/index.min.js"></script>
     <script src="wasm_exec.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -15,9 +17,22 @@
 <body class="p-4 md:p-8">
 
     <div class="max-w-7xl mx-auto">
-        <div class="text-center mb-8">
+        <div class="text-center mb-8 relative">
             <h1 class="text-4xl font-bold text-white mb-2">Enhanced Go Crypto Bot</h1>
             <p class="text-slate-400">Advanced algorithmic trading with WebAssembly</p>
+            <div id="theme-toggle-container" class="absolute top-0 right-0 flex items-center space-x-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd" />
+                </svg>
+                <label for="theme-toggle" class="toggle">
+                    <label for="theme-toggle" class="sr-only">Toggle theme</label>
+                    <input type="checkbox" id="theme-toggle" title="Toggle theme">
+                    <span class="slider"></span>
+                </label>
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z" />
+                </svg>
+            </div>
         </div>
         
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -114,13 +129,13 @@
                                 <label for="connector" class="block text-sm font-medium text-slate-300 mb-2">Connector</label>
                                 <select id="connector" class="param-input" title="Connector">
                                     <option value="simulation">Simulation (Safe, Fake Data)</option>
-                                    <option value="coinbase">Coinbase (Template)</option>
-                                    <option value="binance">Binance (Template)</option>
+                                    <option value="coinbase">Coinbase (Live)</option>
+                                    <option value="binance">Binance (Live)</option>
                                 </select>
                             </div>
                             <div id="connector-params" class="space-y-3"></div>
-                            <div class="alert alert-info">
-                                <strong>Note:</strong> Real exchange connections require API keys and are templates only.
+                            <div class="alert alert-warning text-xs">
+                                <strong>Risk Warning:</strong> Using real exchange connectors with valid API keys can result in financial loss. The `PlaceOrder` function is now active for Binance. Always start with paper trading.
                             </div>
                         </div>
                         
@@ -136,6 +151,7 @@
                                     <option value="rsi_basic">Relative Strength Index (RSI)</option>
                                     <option value="stochastic">Stochastic Oscillator</option>
                                     <option value="bollinger">Bollinger Bands</option>
+                                    <option value="user_mod" hidden>User Mod (Custom)</option>
                                 </select>
                             </div>
                             <div id="strategy-params" class="space-y-3"></div>
@@ -195,7 +211,13 @@
                     </div>
                 </div>
                 
-                <div class="flex items-center space-x-3 pt-6">
+                <div class="flex items-center space-x-3 pt-4 border-t border-slate-700 mt-6">
+                    <button id="saveConfigBtn" class="flex-1 bg-slate-600 hover:bg-slate-500 text-white font-semibold py-3 px-4 rounded-lg transition duration-300 text-sm">Save Config</button>
+                    <label for="loadConfigInput" class="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 px-4 rounded-lg transition duration-300 text-sm text-center cursor-pointer">Load Config</label>
+                    <input type="file" id="loadConfigInput" class="hidden" accept=".json">
+                </div>
+
+                <div class="flex items-center space-x-3 pt-3">
                     <button id="startButton" class="flex-1 btn-success text-white font-bold py-3 px-4 rounded-lg transition duration-300">
                         <span class="flex items-center justify-center">
                             <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -219,12 +241,15 @@
 
             <div class="lg:col-span-2 space-y-8">
                 <div class="glass-morphism p-6 rounded-xl shadow-2xl">
-                    <h2 class="text-xl font-bold text-white mb-4 flex items-center">
-                        <svg class="w-6 h-6 mr-2 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
-                        </svg>
-                        Performance Chart
-                    </h2>
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-xl font-bold text-white flex items-center">
+                            <svg class="w-6 h-6 mr-2 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                            </svg>
+                            Performance Chart
+                        </h2>
+                        <button id="resetZoomBtn" class="text-xs bg-slate-600 hover:bg-slate-500 text-white px-3 py-1 rounded-lg transition">Reset Zoom</button>
+                    </div>
                     <div class="chart-container">
                         <canvas id="priceChart"></canvas>
                     </div>

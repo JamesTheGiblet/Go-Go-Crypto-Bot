@@ -2,9 +2,16 @@ package main
 
 import (
 	"encoding/json"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"math/rand"
+	"strconv"
+	"strings"
+	"sync"
+	"crypto/hmac"
+	"crypto/sha256"
 	"syscall/js"
 	"time"
 )
@@ -43,7 +50,8 @@ type BotState struct {
 type Connector interface {
 	Connect(paperTrading bool, symbol string) error
 	GetPrice() (float64, error)
-	PlaceOrder(signal Signal, price float64, symbol string) error
+	PlaceOrder(bs *BotState, signal Signal, price float64, symbol string) error
+	Disconnect() error
 }
 
 type SimulationConnector struct{ lastPrice float64; volatility float64 }
@@ -67,7 +75,7 @@ func (sc *SimulationConnector) GetPrice() (float64, error) {
 	}
 	return sc.lastPrice, nil
 }
-func (sc *SimulationConnector) PlaceOrder(signal Signal, price float64, symbol string) error {
+func (sc *SimulationConnector) PlaceOrder(bs *BotState, signal Signal, price float64, symbol string) error {
 	orderType := "HOLD"
 	if signal == BUY {
 		orderType = "BUY"
@@ -78,18 +86,361 @@ func (sc *SimulationConnector) PlaceOrder(signal Signal, price float64, symbol s
 	logMessage("success", fmt.Sprintf("[PAPER TRADE] Placed %s order for %s at $%.2f", orderType, symbol, price))
 	return nil
 }
+func (sc *SimulationConnector) Disconnect() error { return nil }
 
-type CoinbaseConnector struct{ apiKey, apiSecret, secretPhrase string; isPaperTrade bool }
+type CoinbaseConnector struct {
+	apiKey       string
+	apiSecret    string
+	secretPhrase string
+	isPaperTrade bool
+	ws           js.Value
+	lastPrice    float64
+	mu           sync.Mutex
+}
 
-func (cc *CoinbaseConnector) Connect(paperTrading bool, symbol string) error { logMessage("info", "Coinbase Connector Initialized."); cc.isPaperTrade = paperTrading; if cc.apiKey == "" || cc.apiSecret == "" { return fmt.Errorf("API Key or Secret is missing for Coinbase") }; logMessage("success", "API Keys loaded for Coinbase."); return nil }
-func (cc *CoinbaseConnector) GetPrice() (float64, error) { logMessage("warning", "Coinbase.GetPrice() not implemented."); return 123.45, nil }
-func (cc *CoinbaseConnector) PlaceOrder(signal Signal, price float64, symbol string) error { orderType := "HOLD"; if signal == BUY { orderType = "BUY" }; if signal == SELL { orderType = "SELL" }; tradeMode := "REAL"; if cc.isPaperTrade { tradeMode = "PAPER" }; logMessage("warning", fmt.Sprintf("[%s TRADE TEMPLATE] Would place %s order for %s at %.2f via Coinbase.", tradeMode, orderType, symbol, price)); return nil }
+func (cc *CoinbaseConnector) Connect(paperTrading bool, symbol string) error {
+	logMessage("info", "Coinbase Connector Initializing...")
+	cc.isPaperTrade = paperTrading
+	if !paperTrading && (cc.apiKey == "" || cc.apiSecret == "" || cc.secretPhrase == "") {
+		return fmt.Errorf("API Key, Secret, or Passphrase is missing for Coinbase")
+	}
 
-type BinanceConnector struct{ apiKey, apiSecret string; isPaperTrade bool }
+	wsURL := "wss://ws-feed.pro.coinbase.com"
+	logMessage("info", "Connecting to Coinbase WebSocket: "+wsURL)
 
-func (bc *BinanceConnector) Connect(paperTrading bool, symbol string) error { logMessage("info", "Binance Connector Initialized."); bc.isPaperTrade = paperTrading; if bc.apiKey == "" || bc.apiSecret == "" { return fmt.Errorf("API Key or Secret is missing for Binance") }; logMessage("success", "API Keys loaded for Binance."); return nil }
-func (bc *BinanceConnector) GetPrice() (float64, error) { logMessage("warning", "Binance.GetPrice() not implemented."); return 543.21, nil }
-func (bc *BinanceConnector) PlaceOrder(signal Signal, price float64, symbol string) error { orderType := "HOLD"; if signal == BUY { orderType = "BUY" }; if signal == SELL { orderType = "SELL" }; tradeMode := "REAL"; if bc.isPaperTrade { tradeMode = "PAPER" }; logMessage("warning", fmt.Sprintf("[%s TRADE TEMPLATE] Would place %s order for %s at %.2f via Binance.", tradeMode, orderType, symbol, price)); return nil }
+	ws := js.Global().Get("WebSocket").New(wsURL)
+	cc.ws = ws
+
+	connected := make(chan bool)
+	var onOpen, onMessage, onError, onClose js.Func
+
+	onOpen = js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		logMessage("success", "Coinbase WebSocket connection established.")
+		// Coinbase requires a subscription message after connecting.
+		// Symbol format needs to be like "BTC-USD"
+		coinbaseSymbol := strings.Replace(strings.ToUpper(symbol), "USDT", "-USD", 1)
+
+		subMsg := map[string]interface{}{
+			"type":        "subscribe",
+			"product_ids": []string{coinbaseSymbol},
+			"channels":    []string{"ticker"},
+		}
+		subMsgJSON, _ := json.Marshal(subMsg)
+		ws.Call("send", string(subMsgJSON))
+		logMessage("info", fmt.Sprintf("Subscribed to Coinbase ticker for %s", coinbaseSymbol))
+		connected <- true
+		return nil
+	})
+	ws.Set("onopen", onOpen)
+
+	onMessage = js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		event := args[0]
+		data := event.Get("data").String()
+		var tickerData map[string]interface{}
+		if err := json.Unmarshal([]byte(data), &tickerData); err != nil {
+			// Coinbase sends non-JSON heartbeats, we can ignore parse errors on those.
+			return nil
+		}
+		// Check if it's a ticker update
+		if t, ok := tickerData["type"].(string); ok && t == "ticker" {
+			if priceStr, ok := tickerData["price"].(string); ok {
+				if price, err := strconv.ParseFloat(priceStr, 64); err == nil {
+					cc.mu.Lock()
+					cc.lastPrice = price
+					cc.mu.Unlock()
+				}
+			}
+		}
+		return nil
+	})
+	ws.Set("onmessage", onMessage)
+
+	onError = js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		logMessage("error", "Coinbase WebSocket error.")
+		return nil
+	})
+	ws.Set("onerror", onError)
+
+	onClose = js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		logMessage("warning", "Coinbase WebSocket connection closed.")
+		onOpen.Release()
+		onMessage.Release()
+		onError.Release()
+		this.Release()
+		return nil
+	})
+	ws.Set("onclose", onClose)
+
+	select {
+	case <-connected:
+		return nil
+	case <-time.After(10 * time.Second):
+		return fmt.Errorf("Coinbase WebSocket connection timed out")
+	}
+}
+
+func (cc *CoinbaseConnector) GetPrice() (float64, error) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	if cc.lastPrice == 0 {
+		return 0, fmt.Errorf("price not available yet from Coinbase WebSocket")
+	}
+	return cc.lastPrice, nil
+}
+
+func (cc *CoinbaseConnector) PlaceOrder(bs *BotState, signal Signal, price float64, symbol string) error {
+	if cc.isPaperTrade {
+		orderType := "HOLD"
+		if signal == BUY {
+			orderType = "BUY"
+		}
+		if signal == SELL {
+			orderType = "SELL"
+		}
+		logMessage("success", fmt.Sprintf("[PAPER TRADE] Placed %s order for %s at $%.2f", orderType, symbol, price))
+		return nil
+	}
+
+	if cc.apiKey == "" || cc.apiSecret == "" || cc.secretPhrase == "" {
+		err := fmt.Errorf("cannot place real order: Coinbase API Key, Secret, or Passphrase is missing")
+		logMessage("error", err.Error())
+		return err
+	}
+
+	go func() {
+		side := "buy"
+		if signal == SELL {
+			side = "sell"
+		}
+
+		coinbaseSymbol := strings.Replace(strings.ToUpper(symbol), "USDT", "-USD", 1)
+
+		quoteOrderQty := "20.00" // Moderate
+		switch bs.config.RiskLevel {
+		case "conservative":
+			quoteOrderQty = "10.00"
+		case "aggressive":
+			quoteOrderQty = "50.00"
+		}
+
+		orderBody := map[string]string{"product_id": coinbaseSymbol, "side": side, "type": "market", "funds": quoteOrderQty}
+		if side == "sell" {
+			logMessage("warning", "Coinbase market SELL orders require 'size' (amount of crypto). This is not implemented. Order will likely fail.")
+			delete(orderBody, "funds")
+			orderBody["size"] = "0.001" // Dummy value for demonstration
+		}
+
+		bodyBytes, _ := json.Marshal(orderBody)
+		bodyString := string(bodyBytes)
+
+		timestamp := fmt.Sprintf("%d", time.Now().Unix())
+		method := "POST"
+		requestPath := "/orders"
+		prehash := timestamp + method + requestPath + bodyString
+		decodedSecret, err := base64.StdEncoding.DecodeString(cc.apiSecret)
+		if err != nil {
+			logMessage("error", "Failed to decode Coinbase API secret.")
+			return
+		}
+
+		mac := hmac.New(sha256.New, decodedSecret)
+		mac.Write([]byte(prehash))
+		signature := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+
+		endpoint := "https://api.pro.coinbase.com"
+		url := endpoint + requestPath
+
+		headers := js.Global().Get("Object").New()
+		headers.Set("Content-Type", "application/json")
+		headers.Set("CB-ACCESS-KEY", cc.apiKey)
+		headers.Set("CB-ACCESS-SIGN", signature)
+		headers.Set("CB-ACCESS-TIMESTAMP", timestamp)
+		headers.Set("CB-ACCESS-PASSPHRASE", cc.secretPhrase)
+
+		reqOptions := js.Global().Get("Object").New()
+		reqOptions.Set("method", method)
+		reqOptions.Set("headers", headers)
+		reqOptions.Set("body", bodyString)
+
+		logMessage("info", fmt.Sprintf("[REAL TRADE] Submitting Coinbase %s market order for %s...", side, coinbaseSymbol))
+
+		fetchPromise := js.Global().Call("fetch", url, reqOptions)
+		fetchPromise.Call("then", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			response := args[0]
+			response.Call("json").Call("then", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+				resultJSON, _ := js.Global().Get("JSON").Call("stringify", args[0], nil, 2).String()
+				if response.Get("ok").Bool() {
+					logMessage("success", fmt.Sprintf("Coinbase order successful:\n%s", resultJSON))
+				} else {
+					logMessage("error", fmt.Sprintf("Coinbase API Error:\n%s", resultJSON))
+				}
+				return nil
+			}))
+			return nil
+		})).Call("catch", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			logMessage("error", fmt.Sprintf("Network error during Coinbase trade execution: %v", args[0]))
+			return nil
+		}))
+	}()
+
+	return nil
+}
+func (cc *CoinbaseConnector) Disconnect() error { return nil }
+
+type BinanceConnector struct {
+	apiKey       string
+	apiSecret    string
+	isPaperTrade bool
+	ws           js.Value
+	lastPrice    float64
+	mu           sync.Mutex
+}
+
+func (bc *BinanceConnector) Connect(paperTrading bool, symbol string) error {
+	logMessage("info", "Binance Connector Initializing...")
+	bc.isPaperTrade = paperTrading
+
+	wsURL := fmt.Sprintf("wss://stream.binance.com:9443/ws/%s@trade", strings.ToLower(symbol))
+	logMessage("info", "Connecting to Binance WebSocket: "+wsURL)
+
+	ws := js.Global().Get("WebSocket").New(wsURL)
+	bc.ws = ws
+
+	connected := make(chan bool)
+
+	var onOpen, onMessage, onError, onClose js.Func
+
+	onOpen = js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		logMessage("success", "Binance WebSocket connection established.")
+		connected <- true
+		return nil
+	})
+	ws.Set("onopen", onOpen)
+
+	onMessage = js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		event := args[0]
+		data := event.Get("data").String()
+		var tradeData map[string]interface{}
+		if err := json.Unmarshal([]byte(data), &tradeData); err != nil {
+			logMessage("error", "Error parsing Binance trade data: "+err.Error())
+			return nil
+		}
+		if priceStr, ok := tradeData["p"].(string); ok {
+			if price, err := strconv.ParseFloat(priceStr, 64); err == nil {
+				bc.mu.Lock()
+				bc.lastPrice = price
+				bc.mu.Unlock()
+			}
+		}
+		return nil
+	})
+	ws.Set("onmessage", onMessage)
+
+	onError = js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		logMessage("error", "Binance WebSocket error.")
+		return nil
+	})
+	ws.Set("onerror", onError)
+
+	onClose = js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		logMessage("warning", "Binance WebSocket connection closed.")
+		onOpen.Release(); onMessage.Release(); onError.Release(); this.Release()
+		return nil
+	})
+	ws.Set("onclose", onClose)
+
+	select {
+	case <-connected:
+		return nil
+	case <-time.After(10 * time.Second):
+		return fmt.Errorf("Binance WebSocket connection timed out")
+	}
+}
+
+func (bc *BinanceConnector) GetPrice() (float64, error) {
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+	if bc.lastPrice == 0 {
+		return 0, fmt.Errorf("price not available yet from Binance WebSocket")
+	}
+	return bc.lastPrice, nil
+}
+func (bc *BinanceConnector) PlaceOrder(bs *BotState, signal Signal, price float64, symbol string) error {
+	if bc.isPaperTrade {
+		orderType := "HOLD"
+		if signal == BUY { orderType = "BUY" }
+		if signal == SELL { orderType = "SELL" }
+		logMessage("success", fmt.Sprintf("[PAPER TRADE] Placed %s order for %s at $%.2f", orderType, symbol, price))
+		return nil
+	}
+
+	if bc.apiKey == "" || bc.apiSecret == "" {
+		err := fmt.Errorf("cannot place real order: Binance API Key or Secret is missing")
+		logMessage("error", err.Error())
+		return err
+	}
+
+	// Execute the trade asynchronously to avoid blocking the bot loop
+	go func() {
+		side := "BUY"
+		if signal == SELL { side = "SELL" }
+
+		// Simple risk management: trade a fixed USD amount based on risk level
+		quoteOrderQty := "20.0" // Default: Moderate
+		switch bs.config.RiskLevel {
+		case "conservative":
+			quoteOrderQty = "10.0" // e.g., $10
+		case "aggressive":
+			quoteOrderQty = "50.0" // e.g., $50
+		}
+
+		timestamp := time.Now().UnixNano() / int64(time.Millisecond)
+		queryParams := fmt.Sprintf("symbol=%s&side=%s&type=MARKET&quoteOrderQty=%s&timestamp=%d", symbol, side, quoteOrderQty, timestamp)
+
+		mac := hmac.New(sha256.New, []byte(bc.apiSecret))
+		mac.Write([]byte(queryParams))
+		signature := hex.EncodeToString(mac.Sum(nil))
+
+		endpoint := "https://api.binance.com/api/v3/order"
+		url := fmt.Sprintf("%s?%s&signature=%s", endpoint, queryParams, signature)
+
+		headers := js.Global().Get("Object").New()
+		headers.Set("X-MBX-APIKEY", bc.apiKey)
+		reqOptions := js.Global().Get("Object").New()
+		reqOptions.Set("method", "POST")
+		reqOptions.Set("headers", headers)
+
+		logMessage("info", fmt.Sprintf("[REAL TRADE] Submitting %s market order for %s of $%s...", side, symbol, quoteOrderQty))
+
+		fetchPromise := js.Global().Call("fetch", url, reqOptions)
+
+		fetchPromise.Call("then", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			response := args[0]
+			response.Call("json").Call("then", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+				resultJSON, _ := js.Global().Get("JSON").Call("stringify", args[0], nil, 2).String()
+				if response.Get("ok").Bool() {
+					logMessage("success", fmt.Sprintf("Binance order successful:\n%s", resultJSON))
+				} else {
+					logMessage("error", fmt.Sprintf("Binance API Error:\n%s", resultJSON))
+				}
+				return nil
+			}))
+			return nil
+		})).Call("catch", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			logMessage("error", fmt.Sprintf("Network error during trade execution: %v", args[0]))
+			return nil
+		}))
+	}()
+
+	return nil
+}
+func (bc *BinanceConnector) Disconnect() error {
+	if !bc.ws.IsUndefined() {
+		logMessage("info", "Closing Binance WebSocket connection.")
+		bc.ws.Call("close")
+	}
+	return nil
+}
 
 func NewBotState() *BotState {
 	return &BotState{isRunning: false, stopChannel: make(chan bool), prices: []float64{}, equity: 10000.0, initialEquity: 10000.0}
@@ -100,7 +451,11 @@ func initializeConnector(config Config) (Connector, error) {
 	case "simulation":
 		return &SimulationConnector{}, nil
 	case "coinbase":
-		return &CoinbaseConnector{apiKey: config.ConnectorParams["apiKey"], apiSecret: config.ConnectorParams["apiSecret"], secretPhrase: config.ConnectorParams["secretPhrase"]}, nil
+		return &CoinbaseConnector{
+			apiKey:       config.ConnectorParams["apiKey"],
+			apiSecret:    config.ConnectorParams["apiSecret"],
+			secretPhrase: config.ConnectorParams["secretPhrase"],
+		}, nil
 	case "binance":
 		return &BinanceConnector{apiKey: config.ConnectorParams["apiKey"], apiSecret: config.ConnectorParams["apiSecret"]}, nil
 	default:
@@ -150,6 +505,29 @@ func (bs *BotState) start() {
 				updatePerformanceStats(bs.tradeCount, bs.winRate(), newPrice, bs.profitLoss())
 				logMessage("info", fmt.Sprintf("New price for %s: $%.2f", bs.config.Symbol, newPrice))
 				bs.runStrategy()
+
+				// Calculate and update indicators for the chart
+				indicators := make(map[string]float64)
+				switch bs.config.Strategy {
+				case "sma_crossover":
+					p := bs.config.StrategyParams
+					sp := int(p["sma_short_period"])
+					lp := int(p["sma_long_period"])
+					if len(bs.prices) >= sp {
+						indicators["sma_short"] = sma(bs.prices, sp)
+					}
+					if len(bs.prices) >= lp {
+						indicators["sma_long"] = sma(bs.prices, lp)
+					}
+				case "bollinger":
+					p := bs.config.StrategyParams
+					t := int(p["period"]); s := p["std_dev"]
+					upper, _, lower := bollingerBands(bs.prices, t, s)
+					indicators["bollinger_upper"] = upper
+					indicators["bollinger_lower"] = lower
+				}
+				updateIndicatorsOnChart(indicators)
+
 				bs.checkPriceAlerts(newPrice)
 			case <-bs.stopChannel:
 				ticker.Stop()
@@ -187,6 +565,9 @@ func (bs *BotState) stop() {
 		return
 	}
 	bs.isRunning = false
+	if bs.connector != nil {
+		bs.connector.Disconnect()
+	}
 	bs.stopChannel <- true
 	updateStatus("STOPPED")
 	logMessage("error", "Bot stopped by user.")
@@ -293,7 +674,7 @@ func (bs *BotState) runStrategy() {
 	signal := strategyFunc(bs)
 	if signal != HOLD {
 		price := bs.prices[len(bs.prices)-1]
-		bs.connector.PlaceOrder(signal, price, bs.config.Symbol)
+		bs.connector.PlaceOrder(bs, signal, price, bs.config.Symbol)
 		if signal != bs.lastPosition {
 			bs.tradeCount++
 			if rand.Float64() > 0.4 {
@@ -321,6 +702,16 @@ func plotSignalOnChart(t string, p float64) { js.Global().Call("goPlotSignal", t
 func updatePerformanceStats(t int, w, c, p float64) { js.Global().Call("goUpdatePerformanceStats", t, w, c, p) }
 func updateUptime(d time.Duration) { js.Global().Call("goUpdateUptime", d.String()) }
 func updateLastSignal(s string) { js.Global().Call("goUpdateLastSignal", s) }
+func updateIndicatorsOnChart(indicators map[string]float64) {
+	if len(indicators) == 0 {
+		return
+	}
+	jsonData, err := json.Marshal(indicators)
+	if err != nil {
+		return // Fail silently
+	}
+	js.Global().Call("goUpdateIndicators", string(jsonData))
+}
 
 func main() {
 	fmt.Println("Go WebAssembly module loaded.")
